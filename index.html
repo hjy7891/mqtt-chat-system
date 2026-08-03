@@ -352,6 +352,7 @@
     </div>
     
     <div id="authError" class="auth-error" style="display:none;"></div>
+    <div id="syncStatus" class="auth-subtitle" style="font-size:12px;color:#9ca3af;text-align:center;margin-bottom:12px;">正在同步用户数据...</div>
     
     <div id="loginForm">
       <input type="text" class="auth-input" id="loginUsername" placeholder="用户名" />
@@ -374,8 +375,8 @@
     <div class="main-header">
       <h1>💬 聊天室</h1>
       <div class="user-info">
+        <button class="logout-btn" onclick="showDevModal()" title="开发者设置">🔧</button>
         <div class="user-avatar" id="userAvatar"></div>
-        <button class="logout-btn" onclick="showAdminModal()" title="管理员设置" style="background:rgba(245,158,11,0.3);">🔒</button>
         <button class="logout-btn" onclick="logout()">退出</button>
       </div>
     </div>
@@ -414,6 +415,7 @@
           </div>
         </div>
         <button class="sound-toggle" id="soundToggle" onclick="toggleSound()" title="消息声音通知">🔔</button>
+        <button class="sound-toggle" onclick="showAdminModal()" title="管理员设置">🔒</button>
         <button class="invite-btn" onclick="showInviteModal()">邀请</button>
       </div>
     </div>
@@ -446,25 +448,46 @@
   </div>
 </div>
 
+<!-- 开发者模态框 -->
+<div class="modal-overlay" id="devModal">
+  <div class="modal">
+    <h2>🔧 开发者面板</h2>
+    <div id="devLoginSection">
+      <p>输入开发者密码以执行全局操作：</p>
+      <input type="password" class="auth-input" id="devPasswordInput" placeholder="开发者密码" />
+      <div id="devError" class="auth-error" style="display:none;"></div>
+      <div class="modal-actions" style="margin-top:12px;">
+        <button class="modal-btn modal-btn-secondary" onclick="closeDevModal()">取消</button>
+        <button class="modal-btn modal-btn-primary" onclick="devLogin()">验证</button>
+      </div>
+    </div>
+    <div id="devPanelSection" style="display:none;">
+      <p style="margin-bottom:12px;">开发者已验证，可执行全局操作：</p>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <button class="modal-btn" style="background:#7c3aed;color:#fff;" onclick="clearAllUsers()">🧹 清除所有用户数据</button>
+      </div>
+      <div class="modal-actions" style="margin-top:16px;">
+        <button class="modal-btn modal-btn-secondary" onclick="closeDevModal()">关闭</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- 管理员模态框 -->
 <div class="modal-overlay" id="adminModal">
   <div class="modal">
-    <h2>🔒 管理员设置</h2>
-    <div id="adminLoginSection">
-      <p>输入管理员密码以管理聊天室：</p>
-      <input type="password" class="auth-input" id="adminPasswordInput" placeholder="管理员密码" />
-      <div id="adminError" class="auth-error" style="display:none;"></div>
-      <div class="modal-actions" style="margin-top:12px;">
-        <button class="modal-btn modal-btn-secondary" onclick="closeAdminModal()">取消</button>
-        <button class="modal-btn modal-btn-primary" onclick="adminLogin()">验证</button>
+    <h2>🔒 聊天室管理</h2>
+    <div id="adminDeniedSection" style="display:none;">
+      <p style="color:#6b7280;text-align:center;padding:20px 0;">您不是本聊天室的创建者，无法进行管理操作。</p>
+      <div class="modal-actions">
+        <button class="modal-btn modal-btn-secondary" onclick="closeAdminModal()">关闭</button>
       </div>
     </div>
     <div id="adminPanelSection" style="display:none;">
-      <p style="margin-bottom:12px;">管理员已验证，可执行以下操作：</p>
+      <p style="margin-bottom:12px;">您是本聊天室创建者，可执行以下操作：</p>
       <div style="display:flex;flex-direction:column;gap:8px;">
         <button class="modal-btn" style="background:#dc2626;color:#fff;" onclick="adminClearMessages()">🗑️ 清空聊天记录</button>
         <button class="modal-btn" style="background:#f59e0b;color:#fff;" onclick="adminKickUser()">🚫 踢出用户</button>
-        <button class="modal-btn" style="background:#2563eb;color:#fff;" onclick="adminSetPassword()">🔑 修改管理员密码</button>
       </div>
       <div class="modal-actions" style="margin-top:16px;">
         <button class="modal-btn modal-btn-secondary" onclick="closeAdminModal()">关闭</button>
@@ -502,8 +525,150 @@ let timeoutTimer = null;
 let reconnectAttempts = 0;
 let soundEnabled = true;
 let isAdmin = false;
+let isDev = false;
+let userSyncClient = null;  // 用户数据同步 MQTT 连接
+let usersSynced = false;    // 用户数据是否已同步完成
+let userSyncTimeout = null;
 const ADMIN_DEFAULT_PASSWORD = 'admin123';
+const DEV_PASSWORD = 'dev2024';  // 开发者密码
 const EMOJIS = ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','🙃','😉','😊','😇','🥰','😍','🤩','😘','😗','😚','😙','🥲','😋','😛','😜','🤪','😝','🤑','🤗','🤭','🤫','🤔','🤐','😐','😑','😶','😏','😒','🙄','😬','😮‍💨','🤥','😌','😔','😪','🤤','😴','😷','🤒','🤕','🤢','🤮','🥵','🥶','🥴','😵','🤯','🤠','🥳','😎','🤓','🧐','😕','😟','🙁','☹️','😮','😯','😲','😳','🥺','😦','😧','😨','😰','😥','😢','😭','😱','😖','😣','😞','😓','😩','😫','🥱','👍','👎','👌','✌️','🤞','🤟','🤘','🤙','👈','👉','👆','👇','☝️','✋','🤚','🖐️','🖖','👋','🤝','👏','🙌','👐','🤲','❤️','🧡','💛','💚','💙','💜','🖤','🤍','🤎','💔','❣️','💕','💞','💓','💗','💖','💘','💝','🎉','🎊','🎈','🎂','🎁','🔥','⭐','✨','💫','🌟','⚡','💥'];
+
+// ==================== 用户数据同步 ====================
+
+const USER_SYNC_TOPIC = 'chat_users';
+
+// SHA-256 密码哈希
+async function hashPassword(password) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(password);
+  const hash = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// 初始化用户数据同步连接
+function initUserSync() {
+  userSyncClient = mqtt.connect(BROKER_URL, {
+    clientId: 'userSync_' + Math.random().toString(16).substr(2, 8),
+    clean: true,
+    connectTimeout: 5000,
+    reconnectPeriod: 3000,
+  });
+
+  userSyncClient.on('connect', () => {
+    userSyncClient.subscribe(USER_SYNC_TOPIC + '/+', (err) => {
+      if (!err) {
+        // 订阅成功后等待1.5秒接收retained messages，然后标记为已同步
+        userSyncTimeout = setTimeout(() => {
+          usersSynced = true;
+          updateSyncStatus();
+        }, 1500);
+      } else {
+        // 订阅失败，立即允许用本地数据登录
+        usersSynced = true;
+        updateSyncStatus();
+      }
+    });
+  });
+
+  // 总超时：如果连接失败，5秒后也允许登录（用本地数据）
+  setTimeout(() => {
+    if (!usersSynced) {
+      usersSynced = true;
+      updateSyncStatus();
+    }
+  }, 5000);
+
+  userSyncClient.on('message', (topic, message) => {
+    try {
+      const msgStr = message.toString();
+      const username = topic.split('/').pop();
+
+      // 空消息表示该用户已被删除（清除内测数据时发布）
+      if (!msgStr) {
+        const users = JSON.parse(localStorage.getItem('chatUsers') || '{}');
+        if (users[username]) {
+          delete users[username];
+          localStorage.setItem('chatUsers', JSON.stringify(users));
+        }
+        return;
+      }
+
+      const userData = JSON.parse(msgStr);
+      if (userData.username) {
+        // 收到数据，立即标记为已同步
+        if (!usersSynced) {
+          usersSynced = true;
+          if (userSyncTimeout) clearTimeout(userSyncTimeout);
+          updateSyncStatus();
+        }
+        // 更新本地用户数据
+        const users = JSON.parse(localStorage.getItem('chatUsers') || '{}');
+        users[userData.username] = userData;
+        localStorage.setItem('chatUsers', JSON.stringify(users));
+      }
+    } catch (e) {
+      console.error('User sync parse error:', e);
+    }
+  });
+}
+
+// 发布用户数据到 MQTT（同步到所有设备）
+async function publishUser(username, password) {
+  const passwordHash = await hashPassword(password);
+  const userData = {
+    username: username,
+    passwordHash: passwordHash,
+    createdAt: new Date().toISOString()
+  };
+  userSyncClient.publish(USER_SYNC_TOPIC + '/' + username, JSON.stringify(userData), {
+    qos: 0,
+    retain: true
+  });
+  return userData;
+}
+
+// 更新登录页面的同步状态提示
+function updateSyncStatus() {
+  const statusEl = document.getElementById('syncStatus');
+  if (statusEl) {
+    statusEl.textContent = '';
+    statusEl.style.display = 'none';
+  }
+}
+
+// 清除所有用户数据（正式发布前清除内测数据，需开发者权限）
+function clearAllUsers() {
+  if (!isDev) {
+    alert('需要开发者权限');
+    return;
+  }
+  if (!confirm('确定要清除所有用户数据吗？\n\n此操作会删除所有设备上的已注册用户账号，不可撤销！')) return;
+  if (!confirm('再次确认：这将永久删除所有用户账号，所有设备都会同步清除。确定继续？')) return;
+
+  const users = JSON.parse(localStorage.getItem('chatUsers') || '{}');
+  const usernames = Object.keys(users);
+
+  if (usernames.length === 0) {
+    alert('没有用户数据需要清除');
+    closeDevModal();
+    return;
+  }
+
+  // 对每个用户发布空消息，清除 MQTT retained message
+  // 其他设备收到空消息后会自动删除本地对应用户
+  usernames.forEach(username => {
+    userSyncClient.publish(USER_SYNC_TOPIC + '/' + username, '', {
+      qos: 0,
+      retain: true
+    });
+  });
+
+  // 清除本地数据
+  localStorage.removeItem('chatUsers');
+
+  alert(`已清除 ${usernames.length} 个用户数据。\n所有设备将在下次连接时同步清除。`);
+  closeDevModal();
+}
 
 // ==================== 认证功能 ====================
 
@@ -527,11 +692,11 @@ function showAuthError(msg) {
   errorEl.style.display = 'block';
 }
 
-function register() {
+async function register() {
   const username = document.getElementById('registerUsername').value.trim();
   const password = document.getElementById('registerPassword').value;
   const confirmPassword = document.getElementById('registerConfirmPassword').value;
-  
+
   if (!username || !password) {
     showAuthError('请填写完整信息');
     return;
@@ -540,47 +705,59 @@ function register() {
     showAuthError('两次输入的密码不一致');
     return;
   }
-  
+
   // 检查用户名是否已存在
   const users = JSON.parse(localStorage.getItem('chatUsers') || '{}');
   if (users[username]) {
     showAuthError('用户名已存在');
     return;
   }
-  
-  // 保存用户信息
-  users[username] = {
-    username: username,
-    password: password,
-    createdAt: new Date().toISOString()
-  };
+
+  // 发布用户数据到 MQTT（同步到所有设备），密码用 SHA-256 哈希
+  const userData = await publishUser(username, password);
+
+  // 保存到本地
+  users[username] = userData;
   localStorage.setItem('chatUsers', JSON.stringify(users));
-  
+
   // 自动登录
   currentUser = { username: username };
   localStorage.setItem('currentUser', JSON.stringify(currentUser));
   handlePostLogin();
 }
 
-function login() {
+async function login() {
   const username = document.getElementById('loginUsername').value.trim();
   const password = document.getElementById('loginPassword').value;
-  
+
   if (!username || !password) {
     showAuthError('请填写用户名和密码');
     return;
   }
-  
+
+  // 等待用户数据同步完成
+  if (!usersSynced) {
+    showAuthError('正在同步用户数据，请稍后再试...');
+    return;
+  }
+
   const users = JSON.parse(localStorage.getItem('chatUsers') || '{}');
   if (!users[username]) {
     showAuthError('用户不存在，请先注册');
     return;
   }
-  if (users[username].password !== password) {
+  // 兼容新格式（passwordHash）和旧格式（明文 password）
+  if (users[username].passwordHash) {
+    const inputHash = await hashPassword(password);
+    if (users[username].passwordHash !== inputHash) {
+      showAuthError('密码错误');
+      return;
+    }
+  } else if (users[username].password !== password) {
     showAuthError('密码错误');
     return;
   }
-  
+
   currentUser = { username: username };
   localStorage.setItem('currentUser', JSON.stringify(currentUser));
   handlePostLogin();
@@ -618,6 +795,8 @@ function handlePostLogin() {
 function logout() {
   localStorage.removeItem('currentUser');
   currentUser = null;
+  isAdmin = false;
+  isDev = false;
   stopChatConnection();
   showLoginPage();
 }
@@ -648,17 +827,23 @@ function showChatPage(roomId, roomName) {
   currentRoomName = roomName;
   document.getElementById('chatRoomName').textContent = roomName;
   document.getElementById('msgBox').innerHTML = '';
-  
+
+  // 判断当前用户是否是聊天室创建者（每室隔离）
+  const rooms = JSON.parse(localStorage.getItem('chatRooms') || '[]');
+  const room = rooms.find(r => r.id === roomId);
+  isAdmin = !!(room && room.creator === currentUser.username);
+
   // 加载累计用户列表
   const savedTotal = JSON.parse(localStorage.getItem('roomTotalUsers_' + roomId) || '[]');
   totalUsers = new Map(savedTotal.map(u => [u.id, u]));
-  
+
   showPage('chatPage');
   connectChat();
 }
 
 function backToMain() {
   stopChatConnection();
+  isAdmin = false;
   showMainPage();
 }
 
@@ -1241,39 +1426,53 @@ function toggleSound() {
   document.getElementById('soundToggle').style.opacity = soundEnabled ? '1' : '0.5';
 }
 
+// ==================== 开发者功能 ====================
+
+function showDevModal() {
+  document.getElementById('devModal').classList.add('active');
+  if (isDev) {
+    document.getElementById('devLoginSection').style.display = 'none';
+    document.getElementById('devPanelSection').style.display = 'block';
+  } else {
+    document.getElementById('devLoginSection').style.display = 'block';
+    document.getElementById('devPanelSection').style.display = 'none';
+    document.getElementById('devPasswordInput').value = '';
+    document.getElementById('devError').style.display = 'none';
+  }
+}
+
+function closeDevModal() {
+  document.getElementById('devModal').classList.remove('active');
+}
+
+function devLogin() {
+  const password = document.getElementById('devPasswordInput').value;
+  if (password === DEV_PASSWORD) {
+    isDev = true;
+    document.getElementById('devLoginSection').style.display = 'none';
+    document.getElementById('devPanelSection').style.display = 'block';
+  } else {
+    const errEl = document.getElementById('devError');
+    errEl.textContent = '密码错误';
+    errEl.style.display = 'block';
+  }
+}
+
 // ==================== 管理员功能 ====================
 
 function showAdminModal() {
   document.getElementById('adminModal').classList.add('active');
   if (isAdmin) {
-    document.getElementById('adminLoginSection').style.display = 'none';
+    document.getElementById('adminDeniedSection').style.display = 'none';
     document.getElementById('adminPanelSection').style.display = 'block';
   } else {
-    document.getElementById('adminLoginSection').style.display = 'block';
+    document.getElementById('adminDeniedSection').style.display = 'block';
     document.getElementById('adminPanelSection').style.display = 'none';
-    document.getElementById('adminPasswordInput').value = '';
-    document.getElementById('adminError').style.display = 'none';
   }
 }
 
 function closeAdminModal() {
   document.getElementById('adminModal').classList.remove('active');
-}
-
-function adminLogin() {
-  const password = document.getElementById('adminPasswordInput').value;
-  const savedPassword = localStorage.getItem('adminPassword') || ADMIN_DEFAULT_PASSWORD;
-  
-  if (password === savedPassword) {
-    isAdmin = true;
-    document.getElementById('adminLoginSection').style.display = 'none';
-    document.getElementById('adminPanelSection').style.display = 'block';
-    sysMsg('管理员已验证', 'success');
-  } else {
-    const errEl = document.getElementById('adminError');
-    errEl.textContent = '密码错误';
-    errEl.style.display = 'block';
-  }
 }
 
 function adminClearMessages() {
@@ -1313,19 +1512,6 @@ function adminKickUser() {
   closeAdminModal();
 }
 
-function adminSetPassword() {
-  if (!isAdmin) return;
-  const newPwd = prompt('输入新的管理员密码：');
-  if (!newPwd) return;
-  if (newPwd.length < 4) {
-    alert('密码至少4位');
-    return;
-  }
-  localStorage.setItem('adminPassword', newPwd);
-  sysMsg('管理员密码已修改', 'success');
-  closeAdminModal();
-}
-
 // ==================== 邀请功能 ====================
 
 function showInviteModal() {
@@ -1352,8 +1538,12 @@ window.onload = () => {
   localStorage.removeItem('currentUser');
   currentUser = null;
   isAdmin = false;
+  isDev = false;
   showLoginPage();
-  
+
+  // 初始化用户数据同步（跨设备同步账号）
+  initUserSync();
+
   // 初始化表情面板
   initEmojiPanel();
   
