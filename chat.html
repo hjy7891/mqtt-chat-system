@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"/>
+  <title>内部专用聊天系统</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #f3f4f6; max-width: 480px; margin: 0 auto; padding: 16px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+    .chat-container { background: #fff; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); display: flex; flex-direction: column; height: calc(100vh - 32px); overflow: hidden; }
+    .chat-header { padding: 12px 16px; background: #2563eb; color: #fff; display: flex; justify-content: space-between; align-items: center; }
+    .chat-header h1 { font-size: 16px; font-weight: 600; }
+    .online-count { font-size: 14px; }
+    .online-count span { font-weight: 700; }
+    .user-input { padding: 12px 16px; border-bottom: 1px solid #e5e7eb; }
+    .user-input input { width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; }
+    .msg-box { flex: 1; padding: 16px; overflow-y: auto; background: #f9fafb; display: flex; flex-direction: column; gap: 12px; }
+    .msg-box::-webkit-scrollbar { width: 4px; }
+    .msg-box::-webkit-scrollbar-track { background: #e5e7eb; }
+    .msg-box::-webkit-scrollbar-thumb { background: #9ca3af; border-radius: 2px; }
+    .msg-row { display: flex; }
+    .msg-row.right { justify-content: flex-end; }
+    .msg-bubble { max-width: 85%; padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.5; }
+    .msg-row.right .msg-bubble { background: #dcfce7; border-bottom-right-radius: 2px; }
+    .msg-row.left .msg-bubble { background: #fff; border-bottom-left-radius: 2px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+    .msg-user { font-size: 12px; font-weight: 600; margin-bottom: 4px; color: #374151; }
+    .msg-time { font-size: 10px; color: #9ca3af; margin-top: 4px; }
+    .sys-msg { text-align: center; font-size: 12px; color: #6b7280; margin: 8px 0; }
+    .sys-msg.error { color: #dc2626; }
+    .sys-msg.success { color: #16a34a; }
+    .input-area { padding: 12px 16px; border-top: 1px solid #e5e7eb; display: flex; gap: 8px; align-items: center; }
+    .input-area input[type="text"] { flex: 1; padding: 10px 14px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; }
+    .btn { padding: 10px 20px; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; transition: opacity 0.2s; }
+    .btn:hover { opacity: 0.9; }
+    .btn-send { background: #22c55e; color: #fff; font-weight: 500; }
+    .status-bar { padding: 4px 16px; background: #f3f4f6; font-size: 10px; color: #6b7280; text-align: center; }
+  </style>
+</head>
+<body>
+<div class="chat-container">
+  <div class="chat-header">
+    <h1>📩 内部聊天系统</h1>
+    <div class="online-count">在线: <span id="online">0</span> 人</div>
+  </div>
+  <div class="user-input">
+    <input id="user" placeholder="输入你的昵称" />
+  </div>
+  <div id="msgBox" class="msg-box"></div>
+  <div class="status-bar" id="statusBar">连接中...</div>
+  <div class="input-area">
+    <input id="msg" placeholder="输入消息..." />
+    <button class="btn btn-send" onclick="send()">发送</button>
+  </div>
+</div>
+<script>
+let lastMsgId = -1;
+let isConnected = false;
+
+function updateStatus(text, type) {
+  const bar = document.getElementById('statusBar');
+  bar.textContent = text;
+  bar.className = 'status-bar';
+  if (type) bar.classList.add(type);
+}
+
+function updateOnline(count) {
+  document.getElementById('online').textContent = count;
+}
+
+function getBaseUrl() {
+  return window.location.origin;
+}
+
+window.onload = () => {
+  sysMsg('正在连接服务器...');
+  loadHistory();
+  poll();
+  
+  document.getElementById('msg').addEventListener('keydown', e => e.key === 'Enter' && send());
+};
+
+function poll() {
+  const url = `${getBaseUrl()}/poll?id=${lastMsgId}`;
+  
+  fetch(url, { timeout: 35000 })
+    .then(res => res.json())
+    .then(data => {
+      isConnected = true;
+      updateStatus('已连接', 'success');
+      
+      if (data.online !== undefined) {
+        updateOnline(data.online);
+      }
+      
+      if (data.messages && data.messages.length > 0) {
+        data.messages.forEach(showMsg);
+        saveHistory(data.messages);
+        lastMsgId = data.id;
+      }
+      
+      poll();
+    })
+    .catch(err => {
+      isConnected = false;
+      updateStatus('连接断开，重试中...', 'error');
+      setTimeout(poll, 2000);
+    });
+}
+
+function send() {
+  const user = document.getElementById('user').value.trim();
+  const msg = document.getElementById('msg').value.trim();
+  
+  if (!user) {
+    alert('请输入昵称！');
+    return;
+  }
+  if (!msg) return;
+  
+  fetch(`${getBaseUrl()}/send`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user: user, msg: msg })
+  })
+    .then(res => res.json())
+    .then(() => {
+      document.getElementById('msg').value = '';
+    })
+    .catch(err => {
+      sysMsg('发送失败，请检查网络连接', 'error');
+    });
+}
+
+function showMsg(data) {
+  const isMe = data.user === document.getElementById('user').value;
+  const div = document.createElement('div');
+  div.className = 'msg-row ' + (isMe ? 'right' : 'left');
+  
+  div.innerHTML = '<div class="msg-bubble"><div class="msg-user">' + data.user + ' ' + data.time + '</div><div>' + data.msg + '</div></div>';
+  
+  document.getElementById('msgBox').appendChild(div);
+  document.getElementById('msgBox').scrollTop = document.getElementById('msgBox').scrollHeight;
+}
+
+function sysMsg(text, type) {
+  const d = document.createElement('div');
+  d.className = 'sys-msg' + (type ? ' ' + type : '');
+  d.textContent = text;
+  document.getElementById('msgBox').appendChild(d);
+  document.getElementById('msgBox').scrollTop = document.getElementById('msgBox').scrollHeight;
+}
+
+function saveHistory(messages) {
+  let h = JSON.parse(localStorage.getItem('chatHistory') || '[]');
+  h = h.concat(messages);
+  localStorage.setItem('chatHistory', JSON.stringify(h.slice(-200)));
+}
+
+function loadHistory() {
+  let h = JSON.parse(localStorage.getItem('chatHistory') || '[]');
+  h.forEach(showMsg);
+}
+</script>
+</body>
+</html>

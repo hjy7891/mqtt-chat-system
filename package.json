@@ -1,0 +1,13 @@
+{
+  "name": "mqtt-chat-system",
+  "version": "1.0.0",
+  "description": "Internal chat system with HTTP polling",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": ["chat", "messaging"],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}
