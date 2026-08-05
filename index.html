@@ -465,6 +465,7 @@
       <p style="margin-bottom:12px;">开发者已验证，可执行全局操作：</p>
       <div style="display:flex;flex-direction:column;gap:8px;">
         <button class="modal-btn" style="background:#7c3aed;color:#fff;" onclick="clearAllUsers()">🧹 清除所有用户数据</button>
+        <button class="modal-btn" style="background:#dc2626;color:#fff;" onclick="clearAllRooms()">🗑️ 清除所有聊天室</button>
       </div>
       <div class="modal-actions" style="margin-top:16px;">
         <button class="modal-btn modal-btn-secondary" onclick="closeDevModal()">关闭</button>
@@ -488,6 +489,7 @@
       <div style="display:flex;flex-direction:column;gap:8px;">
         <button class="modal-btn" style="background:#dc2626;color:#fff;" onclick="adminClearMessages()">🗑️ 清空聊天记录</button>
         <button class="modal-btn" style="background:#f59e0b;color:#fff;" onclick="adminKickUser()">🚫 踢出用户</button>
+        <button class="modal-btn" style="background:#7c2d12;color:#fff;" onclick="deleteRoom(currentRoomId)">❌ 删除此聊天室</button>
       </div>
       <div class="modal-actions" style="margin-top:16px;">
         <button class="modal-btn modal-btn-secondary" onclick="closeAdminModal()">关闭</button>
@@ -520,6 +522,7 @@ let onlineUsers = new Map();
 let totalUsers = new Map(); // 累计用户: id -> user info
 let currentClientId = null;
 let pendingMsgs = {};
+let processedMsgIds = new Set();  // 已处理过的消息 ID，防止超时后延迟到达导致重复显示
 let heartbeatTimer = null;
 let timeoutTimer = null;
 let reconnectAttempts = 0;
@@ -536,6 +539,7 @@ const EMOJIS = ['😀','😃','😄','😁','😆','😅','🤣','😂','🙂','
 // ==================== 用户数据同步 ====================
 
 const USER_SYNC_TOPIC = 'chat_users';
+const ROOM_SYNC_TOPIC = 'chat_rooms';
 
 // SHA-256 密码哈希
 async function hashPassword(password) {
@@ -555,19 +559,26 @@ function initUserSync() {
   });
 
   userSyncClient.on('connect', () => {
-    userSyncClient.subscribe(USER_SYNC_TOPIC + '/+', (err) => {
+    console.log('[同步] MQTT 已连接');
+    userSyncClient.subscribe([USER_SYNC_TOPIC + '/+', ROOM_SYNC_TOPIC + '/+'], (err) => {
       if (!err) {
+        console.log('[同步] 订阅 chat_users/+ 和 chat_rooms/+ 成功');
         // 订阅成功后等待1.5秒接收retained messages，然后标记为已同步
         userSyncTimeout = setTimeout(() => {
           usersSynced = true;
           updateSyncStatus();
+          console.log('[同步] 同步完成，当前本地用户:', Object.keys(JSON.parse(localStorage.getItem('chatUsers') || '{}')));
         }, 1500);
       } else {
-        // 订阅失败，立即允许用本地数据登录
+        console.error('[同步] 订阅失败:', err);
         usersSynced = true;
         updateSyncStatus();
       }
     });
+  });
+
+  userSyncClient.on('error', (err) => {
+    console.error('[用户同步] 连接错误:', err.message);
   });
 
   // 总超时：如果连接失败，5秒后也允许登录（用本地数据）
@@ -575,16 +586,57 @@ function initUserSync() {
     if (!usersSynced) {
       usersSynced = true;
       updateSyncStatus();
+      console.log('[用户同步] 连接超时，使用本地数据');
     }
   }, 5000);
 
   userSyncClient.on('message', (topic, message) => {
     try {
       const msgStr = message.toString();
+
+      // ========== 处理聊天室数据 (chat_rooms/{roomId}) ==========
+      if (topic.startsWith(ROOM_SYNC_TOPIC + '/')) {
+        const roomId = topic.split('/').pop();
+        const rooms = JSON.parse(localStorage.getItem('chatRooms') || '[]');
+
+        if (!msgStr) {
+          // 空消息表示聊天室已删除
+          console.log('[同步] 聊天室已删除:', roomId);
+          const filtered = rooms.filter(r => r.id !== roomId);
+          localStorage.setItem('chatRooms', JSON.stringify(filtered));
+        } else {
+          const roomData = JSON.parse(msgStr);
+          if (roomData.id) {
+            console.log('[同步] 收到聊天室数据:', roomData.name);
+            const index = rooms.findIndex(r => r.id === roomData.id);
+            if (index >= 0) {
+              // 合并数据，保留本地可能有的额外字段
+              rooms[index] = { ...rooms[index], ...roomData };
+            } else {
+              rooms.push(roomData);
+            }
+            localStorage.setItem('chatRooms', JSON.stringify(rooms));
+
+            // 如果当前在聊天室，更新管理员状态
+            if (currentRoomId === roomData.id && currentUser) {
+              isAdmin = !!(roomData.creator === currentUser.username);
+            }
+          }
+        }
+
+        // 如果当前在主界面，刷新聊天室列表
+        if (document.getElementById('mainPage').classList.contains('active')) {
+          loadRooms();
+        }
+        return;
+      }
+
+      // ========== 处理用户数据 (chat_users/{username}) ==========
       const username = topic.split('/').pop();
 
-      // 空消息表示该用户已被删除（清除内测数据时发布）
       if (!msgStr) {
+        // 空消息表示该用户已被删除
+        console.log('[同步] 用户已删除:', username);
         const users = JSON.parse(localStorage.getItem('chatUsers') || '{}');
         if (users[username]) {
           delete users[username];
@@ -595,19 +647,18 @@ function initUserSync() {
 
       const userData = JSON.parse(msgStr);
       if (userData.username) {
-        // 收到数据，立即标记为已同步
+        console.log('[同步] 收到用户数据:', userData.username);
         if (!usersSynced) {
           usersSynced = true;
           if (userSyncTimeout) clearTimeout(userSyncTimeout);
           updateSyncStatus();
         }
-        // 更新本地用户数据
         const users = JSON.parse(localStorage.getItem('chatUsers') || '{}');
         users[userData.username] = userData;
         localStorage.setItem('chatUsers', JSON.stringify(users));
       }
     } catch (e) {
-      console.error('User sync parse error:', e);
+      console.error('[同步] 解析错误:', e);
     }
   });
 }
@@ -620,11 +671,23 @@ async function publishUser(username, password) {
     passwordHash: passwordHash,
     createdAt: new Date().toISOString()
   };
-  userSyncClient.publish(USER_SYNC_TOPIC + '/' + username, JSON.stringify(userData), {
+  const topic = USER_SYNC_TOPIC + '/' + username;
+  console.log('[用户同步] 发布用户数据到:', topic, '连接状态:', userSyncClient && userSyncClient.connected);
+  userSyncClient.publish(topic, JSON.stringify(userData), {
     qos: 0,
     retain: true
   });
   return userData;
+}
+
+// 发布聊天室数据到 MQTT（同步到所有设备）
+function publishRoom(roomData) {
+  const topic = ROOM_SYNC_TOPIC + '/' + roomData.id;
+  console.log('[同步] 发布聊天室数据到:', topic, '连接状态:', userSyncClient && userSyncClient.connected);
+  userSyncClient.publish(topic, JSON.stringify(roomData), {
+    qos: 0,
+    retain: true
+  });
 }
 
 // 更新登录页面的同步状态提示
@@ -642,20 +705,17 @@ function clearAllUsers() {
     alert('需要开发者权限');
     return;
   }
+  if (!userSyncClient || !userSyncClient.connected) {
+    alert('MQTT 未连接，请稍后再试');
+    return;
+  }
   if (!confirm('确定要清除所有用户数据吗？\n\n此操作会删除所有设备上的已注册用户账号，不可撤销！')) return;
   if (!confirm('再次确认：这将永久删除所有用户账号，所有设备都会同步清除。确定继续？')) return;
 
   const users = JSON.parse(localStorage.getItem('chatUsers') || '{}');
   const usernames = Object.keys(users);
 
-  if (usernames.length === 0) {
-    alert('没有用户数据需要清除');
-    closeDevModal();
-    return;
-  }
-
   // 对每个用户发布空消息，清除 MQTT retained message
-  // 其他设备收到空消息后会自动删除本地对应用户
   usernames.forEach(username => {
     userSyncClient.publish(USER_SYNC_TOPIC + '/' + username, '', {
       qos: 0,
@@ -663,11 +723,87 @@ function clearAllUsers() {
     });
   });
 
-  // 清除本地数据
+  // 清除本地用户数据
   localStorage.removeItem('chatUsers');
 
   alert(`已清除 ${usernames.length} 个用户数据。\n所有设备将在下次连接时同步清除。`);
   closeDevModal();
+}
+
+// 清除所有聊天室数据（需开发者权限）
+function clearAllRooms() {
+  if (!isDev) {
+    alert('需要开发者权限');
+    return;
+  }
+  if (!userSyncClient || !userSyncClient.connected) {
+    alert('MQTT 未连接，请稍后再试');
+    return;
+  }
+  if (!confirm('确定要清除所有聊天室数据吗？\n\n此操作会删除所有设备上的聊天室，不可撤销！')) return;
+
+  const rooms = JSON.parse(localStorage.getItem('chatRooms') || '[]');
+
+  // 对每个聊天室发布空消息，清除 MQTT retained message
+  rooms.forEach(room => {
+    userSyncClient.publish(ROOM_SYNC_TOPIC + '/' + room.id, '', {
+      qos: 0,
+      retain: true
+    });
+  });
+
+  // 清除本地聊天室数据
+  localStorage.removeItem('chatRooms');
+
+  alert(`已清除 ${rooms.length} 个聊天室数据。\n所有设备将在下次连接时同步清除。`);
+  closeDevModal();
+}
+
+// 删除单个聊天室（仅创建者可删除）
+function deleteRoom(roomId) {
+  if (!userSyncClient || !userSyncClient.connected) {
+    alert('MQTT 未连接，请稍后再试');
+    return;
+  }
+
+  const rooms = JSON.parse(localStorage.getItem('chatRooms') || '[]');
+  const room = rooms.find(r => r.id === roomId);
+
+  if (!room) {
+    alert('聊天室不存在');
+    return;
+  }
+
+  // 仅创建者或开发者可删除
+  const isCreator = room.creator === currentUser.username;
+  if (!isCreator && !isDev) {
+    alert('只有聊天室创建者才能删除聊天室');
+    return;
+  }
+
+  if (!confirm(`确定要删除聊天室「${room.name}」吗？\n此操作不可撤销，所有设备都会同步删除。`)) return;
+
+  // 发布空消息清除 MQTT retained message
+  userSyncClient.publish(ROOM_SYNC_TOPIC + '/' + roomId, '', {
+    qos: 0,
+    retain: true
+  });
+
+  // 删除本地数据
+  const filtered = rooms.filter(r => r.id !== roomId);
+  localStorage.setItem('chatRooms', JSON.stringify(filtered));
+
+  // 清除该聊天室的累计用户列表
+  localStorage.removeItem('roomTotalUsers_' + roomId);
+
+  // 如果当前在此聊天室中，返回主界面
+  if (currentRoomId === roomId) {
+    backToMain();
+  } else {
+    loadRooms();
+  }
+
+  alert('聊天室已删除');
 }
 
 // ==================== 认证功能 ====================
@@ -703,6 +839,12 @@ async function register() {
   }
   if (password !== confirmPassword) {
     showAuthError('两次输入的密码不一致');
+    return;
+  }
+
+  // 等待用户数据同步完成，避免因同步延迟导致重复注册
+  if (!usersSynced) {
+    showAuthError('正在同步用户数据，请稍后再试...');
     return;
   }
 
@@ -769,24 +911,24 @@ function handlePostLogin() {
   const urlParams = new URLSearchParams(window.location.search);
   const roomId = urlParams.get('room');
   const roomName = urlParams.get('name');
-  
+
   if (roomId && roomName) {
-    // 检查聊天室是否存在
+    // 检查聊天室是否已存在于本地
     const rooms = JSON.parse(localStorage.getItem('chatRooms') || '[]');
     if (!rooms.find(r => r.id === roomId)) {
-      // 如果聊天室不存在，自动添加到列表
+      // 聊天室不在本地，先添加临时数据，creator 等 MQTT 同步真实值
       rooms.unshift({
         id: roomId,
         name: roomName,
-        creator: '邀请用户',
+        creator: '',
         createdAt: new Date().toISOString()
       });
       localStorage.setItem('chatRooms', JSON.stringify(rooms));
     }
-    
-    // 直接进入聊天室
+
+    // 直接进入聊天室（urlParams.get 已自动解码，无需再 decodeURIComponent）
     showPage('mainPage');
-    showChatPage(roomId, decodeURIComponent(roomName));
+    showChatPage(roomId, roomName);
   } else {
     showMainPage();
   }
@@ -813,10 +955,14 @@ function showLoginPage() {
 }
 
 function showMainPage() {
+  if (!currentUser) {
+    showLoginPage();
+    return;
+  }
   // 更新用户头像
   const avatar = document.getElementById('userAvatar');
   avatar.textContent = currentUser.username.charAt(0).toUpperCase();
-  
+
   // 加载聊天室列表
   loadRooms();
   showPage('mainPage');
@@ -863,16 +1009,36 @@ function loadRooms() {
     return;
   }
   
-  roomList.innerHTML = rooms.map(room => `
-    <div class="room-item" onclick="enterRoom('${room.id}', '${escapeHtml(room.name)}')">
+  roomList.innerHTML = rooms.map(room => {
+    const canDelete = room.creator === currentUser.username || isDev;
+    return `
+    <div class="room-item" data-room-id="${escapeHtml(room.id)}" data-room-name="${escapeHtml(room.name)}">
       <div class="room-icon">💬</div>
       <div class="room-info">
         <div class="room-name">${escapeHtml(room.name)}</div>
-        <div class="room-desc">创建者: ${escapeHtml(room.creator)}</div>
+        <div class="room-desc">创建者: ${escapeHtml(room.creator || '未知')}</div>
       </div>
+      ${canDelete ? `<button class="room-delete-btn" data-delete-id="${escapeHtml(room.id)}" title="删除聊天室" style="background:#ef4444;color:#fff;border:none;border-radius:6px;padding:6px 10px;cursor:pointer;font-size:13px;margin-left:8px;">✕</button>` : ''}
       <button class="room-join-btn">进入</button>
     </div>
-  `).join('');
+    `;
+  }).join('');
+
+  // 事件委托：点击房间项进入聊天室（避免内联 onclick 导致的 XSS）
+  roomList.querySelectorAll('.room-item').forEach(item => {
+    item.addEventListener('click', function(e) {
+      // 如果点击的是删除按钮，不进入聊天室
+      if (e.target.classList.contains('room-delete-btn')) {
+        e.stopPropagation();
+        const roomId = e.target.getAttribute('data-delete-id');
+        deleteRoom(roomId);
+        return;
+      }
+      const roomId = this.getAttribute('data-room-id');
+      const roomName = this.getAttribute('data-room-name');
+      enterRoom(roomId, roomName);
+    });
+  });
 }
 
 function createRoom() {
@@ -881,19 +1047,24 @@ function createRoom() {
     alert('请输入聊天室名称');
     return;
   }
-  
+
   const roomId = 'room_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
-  const rooms = JSON.parse(localStorage.getItem('chatRooms') || '[]');
-  rooms.unshift({
+  const newRoom = {
     id: roomId,
     name: roomName,
     creator: currentUser.username,
     createdAt: new Date().toISOString()
-  });
+  };
+  const rooms = JSON.parse(localStorage.getItem('chatRooms') || '[]');
+  rooms.unshift(newRoom);
   localStorage.setItem('chatRooms', JSON.stringify(rooms));
+
+  // 发布到 MQTT，同步到所有设备
+  publishRoom(newRoom);
+
   document.getElementById('newRoomName').value = '';
   loadRooms();
-  
+
   // 直接进入新创建的聊天室
   enterRoom(roomId, roomName);
 }
@@ -950,6 +1121,16 @@ function connectChat() {
           sysMsg(data.msg, 'success');
           return;
         }
+        // 已处理过的消息不再显示（防止超时后延迟到达导致重复）
+        if (processedMsgIds.has(data.msgId)) {
+          return;
+        }
+        processedMsgIds.add(data.msgId);
+        // 限制 Set 大小，防止内存无限增长
+        if (processedMsgIds.size > 500) {
+          const firstId = processedMsgIds.values().next().value;
+          processedMsgIds.delete(firstId);
+        }
         if (pendingMsgs[data.msgId]) {
           const pending = pendingMsgs[data.msgId];
           clearTimeout(pending.timeoutId);
@@ -1005,9 +1186,14 @@ function stopChatConnection() {
   onlineUsers.clear();
   currentClientId = null;
   pendingMsgs = {};
+  processedMsgIds.clear();
 }
 
 function initHeartbeat(clientId, topics) {
+  // 清理旧的定时器（防止 MQTT 自动重连时创建重复定时器）
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
+  if (timeoutTimer) clearInterval(timeoutTimer);
+
   onlineUsers.set(clientId, { user: currentUser.username, lastSeen: Date.now() });
   // 添加到累计用户列表
   if (!totalUsers.has(clientId)) {
@@ -1175,14 +1361,15 @@ function send() {
 function retryMsg(msgId) {
   const pending = pendingMsgs[msgId];
   if (!pending) return;
-  
+
   const topics = getTopics();
   const newMsgId = Date.now() + '_' + Math.random().toString(36).substr(2, 5);
   const message = {
     user: currentUser.username,
     msg: pending.msg.msg,
     time: getTimeStr(),
-    msgId: newMsgId
+    msgId: newMsgId,
+    isAdmin: isAdmin
   };
   
   client.publish(topics.chat, JSON.stringify(message));
@@ -1208,36 +1395,57 @@ function showMsg(data) {
   const isMe = data.user === currentUser.username;
   const div = document.createElement('div');
   div.className = 'msg-row ' + (isMe ? 'right' : 'left');
-  
+
   const safeUser = escapeHtml(data.user);
   const safeTime = escapeHtml(data.time || '');
   const adminTag = data.isAdmin ? '<span class="admin-badge">管理员</span>' : '';
-  
+
   let contentHtml = '';
   if (data.type === 'image') {
-    contentHtml = `<img class="msg-img" src="${data.msg}" onclick="previewImage('${data.msg}')" />`;
+    // 使用 data 属性 + 事件监听，避免 XSS；校验 URL 必须是 http(s) 或 data 协议
+    const rawUrl = String(data.msg || '');
+    if (/^(https?:|data:image)/i.test(rawUrl)) {
+      contentHtml = `<img class="msg-img" src="${escapeHtml(rawUrl)}" data-preview-url="${escapeHtml(rawUrl)}" />`;
+    } else {
+      contentHtml = `<div>[不支持的图片链接]</div>`;
+    }
   } else if (data.type === 'file') {
     const safeName = escapeHtml(data.fileName || '文件');
     const safeSize = escapeHtml(data.fileSize || '');
-    contentHtml = `<a class="msg-file" href="${data.msg}" download="${safeName}">
-      <div class="msg-file-icon">📎</div>
-      <div class="msg-file-info">
-        <div class="msg-file-name">${safeName}</div>
-        <div class="msg-file-size">${safeSize}</div>
-      </div>
-    </a>`;
+    const rawUrl = String(data.msg || '');
+    // 只允许 http(s) 协议的文件链接，防止 javascript: 协议 XSS
+    if (/^https?:/i.test(rawUrl)) {
+      contentHtml = `<a class="msg-file" href="${escapeHtml(rawUrl)}" download="${safeName}" target="_blank" rel="noopener noreferrer">
+        <div class="msg-file-icon">📎</div>
+        <div class="msg-file-info">
+          <div class="msg-file-name">${safeName}</div>
+          <div class="msg-file-size">${safeSize}</div>
+        </div>
+      </a>`;
+    } else {
+      contentHtml = `<div>📎 ${safeName} (${safeSize}) [不支持的文件链接]</div>`;
+    }
   } else {
     contentHtml = `<div>${escapeHtml(data.msg)}</div>`;
   }
-  
+
   div.innerHTML = `<div class="msg-bubble"><div class="msg-user">${safeUser}${adminTag} ${safeTime}</div>${contentHtml}</div>`;
-  
+
+  // 图片点击预览（事件监听而非内联 onclick，避免 XSS）
+  const imgEl = div.querySelector('.msg-img');
+  if (imgEl) {
+    imgEl.addEventListener('click', function() {
+      const url = this.getAttribute('data-preview-url');
+      if (url) previewImage(url);
+    });
+  }
+
   document.getElementById('msgBox').appendChild(div);
   document.getElementById('msgBox').scrollTop = document.getElementById('msgBox').scrollHeight;
-  
+
   // 收到他人消息时播放通知音
   if (!isMe && soundEnabled) playNotifySound();
-  
+
   return div;
 }
 
@@ -1251,8 +1459,14 @@ function sysMsg(text, type) {
 
 function escapeHtml(text) {
   const div = document.createElement('div');
-  div.textContent = text;
+  div.textContent = text == null ? '' : String(text);
   return div.innerHTML;
+}
+
+// 转义字符串用于 JS 字符串上下文（防止单引号/反斜杠/换行破坏字符串）
+function escapeJsString(text) {
+  if (text == null) return '';
+  return String(text).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
 }
 
 function getTimeStr() {
@@ -1563,8 +1777,11 @@ window.onload = () => {
   // 关闭页面时清理
   window.addEventListener('beforeunload', () => {
     if (client && client.connected) {
-      client.publish(getTopics().heartbeat, JSON.stringify({ type: 'bye', id: 'current' }));
+      client.publish(getTopics().heartbeat, JSON.stringify({ type: 'bye', id: currentClientId }));
       client.end();
+    }
+    if (userSyncClient) {
+      userSyncClient.end(true);
     }
   });
 };
