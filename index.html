@@ -1194,6 +1194,14 @@ function connectChat() {
 function stopChatConnection() {
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   if (timeoutTimer) clearInterval(timeoutTimer);
+  if (client && client.connected && currentClientId) {
+    // 发布 bye 消息，通知其他端清理本端在线记录
+    try {
+      client.publish(`${currentRoomId}/heartbeat`, JSON.stringify({
+        type: 'bye', id: currentClientId, user: currentUser ? currentUser.username : ''
+      }));
+    } catch (e) { /* 忽略发送错误 */ }
+  }
   if (client) {
     client.end(true);
     client = null;
@@ -1213,6 +1221,14 @@ function initHeartbeat(clientId, topics) {
   // 清理旧的定时器（防止 MQTT 自动重连时创建重复定时器）
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   if (timeoutTimer) clearInterval(timeoutTimer);
+
+  // 清理本地残留的同用户旧连接记录（如 retained 消息中的旧 clientId）
+  const me = currentUser.username;
+  for (const [id, info] of onlineUsers) {
+    if (id !== clientId && info.user === me) {
+      onlineUsers.delete(id);
+    }
+  }
 
   onlineUsers.set(clientId, { user: currentUser.username, lastSeen: Date.now() });
   // 添加到累计用户列表
@@ -1248,6 +1264,12 @@ function handleHeartbeat(data, clientId, topics) {
   const now = Date.now();
   
   if (data.type === 'hello' && data.id !== clientId) {
+    // 如果同一用户名已经以其他 clientId 在线（同设备重连场景），移除旧记录
+    for (const [id, info] of onlineUsers) {
+      if (id !== data.id && info.user === data.user) {
+        onlineUsers.delete(id);
+      }
+    }
     onlineUsers.set(data.id, { user: data.user, lastSeen: now });
     // 添加到累计用户列表
     if (!totalUsers.has(data.id)) {
@@ -1260,12 +1282,20 @@ function handleHeartbeat(data, clientId, topics) {
       type: 'heartbeat', id: clientId, user: currentUser.username, timestamp: now 
     }));
   } else if (data.type === 'heartbeat' && data.id !== clientId) {
+    // 同一用户名出现新 clientId 时，清理旧记录（避免在线数虚增）
+    let replaced = false;
+    for (const [id, info] of onlineUsers) {
+      if (id !== data.id && info.user === data.user) {
+        onlineUsers.delete(id);
+        replaced = true;
+      }
+    }
     onlineUsers.set(data.id, { user: data.user, lastSeen: now });
     // 添加到累计用户列表（以防错过hello消息）
     if (!totalUsers.has(data.id)) {
       totalUsers.set(data.id, { id: data.id, user: data.user, firstSeen: now });
     }
-    updateOnlineCount();
+    if (replaced) updateOnlineCount();
   } else if (data.type === 'bye' && data.id !== clientId && onlineUsers.has(data.id)) {
     const user = onlineUsers.get(data.id).user;
     onlineUsers.delete(data.id);
