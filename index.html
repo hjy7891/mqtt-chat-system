@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>内部聊天系统</title>
   <style>
+    /* 响应式字体基础：使用 clamp() 实现根字体随视口平滑缩放 */
+    html { font-size: clamp(14px, 1.5vw, 18px); }
+    
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #f3f4f6; max-width: 100%; width: 100%; margin: 0 auto; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; min-height: 100vh; }
     .page { display: none; }
@@ -23,11 +26,28 @@
       .main-container, .chat-container { min-height: calc(100vh - 40px); }
     }
     
-    /* 小屏适配 */
+    /* 小屏适配：针对移动端优化字体和尺寸 */
     @media (max-width: 767px) {
       body { padding: 0; }
-      .auth-container { margin: 20px 16px; }
+      .auth-container { margin: 20px 16px; padding: 24px 16px; }
       .main-container, .chat-container { border-radius: 0; min-height: 100vh; }
+      
+      /* 移动端响应式字体 */
+      .auth-title { font-size: clamp(20px, 5vw, 24px); }
+      .auth-subtitle { font-size: clamp(12px, 3vw, 14px); }
+      .auth-input { font-size: clamp(14px, 3.5vw, 16px); padding: 10px 14px; }
+      .auth-btn { font-size: clamp(14px, 3.5vw, 16px); padding: 10px; }
+      .room-name { font-size: clamp(14px, 3.5vw, 16px); }
+      .room-desc { font-size: clamp(12px, 3vw, 13px); }
+      .chat-header h1 { font-size: clamp(14px, 4vw, 16px); }
+      .msg-bubble { font-size: clamp(14px, 3.8vw, 16px); }
+      .msg-user { font-size: clamp(11px, 2.8vw, 12px); }
+      .input-area input[type="text"] { font-size: clamp(14px, 3.5vw, 16px); }
+      .btn { font-size: clamp(14px, 3.5vw, 16px); padding: 10px 16px; }
+      .modal h2 { font-size: clamp(16px, 4.5vw, 18px); }
+      .modal p { font-size: clamp(12px, 3vw, 14px); }
+      .online-count { font-size: clamp(12px, 3vw, 13px); }
+      .back-btn, .invite-btn { font-size: clamp(11px, 2.8vw, 13px); padding: 4px 8px; }
     }
     
     /* 登录/注册样式 */
