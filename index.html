@@ -1096,9 +1096,12 @@ function enterRoom(roomId, roomName) {
 // ==================== MQTT 聊天功能 ====================
 
 function getTopics() {
+  const username = currentUser ? currentUser.username : 'anonymous';
   return {
     chat: `${currentRoomId}/message`,
-    heartbeat: `${currentRoomId}/heartbeat`
+    myHeartbeat: `${currentRoomId}/heartbeat/${username}`,
+    heartbeatSubscribe: `${currentRoomId}/heartbeat/+`,
+    admin: `${currentRoomId}/admin`
   };
 }
 
@@ -1122,7 +1125,8 @@ function connectChat() {
     updateStatus('已连接', 'success');
     reconnectAttempts = 0;
     
-    client.subscribe([topics.chat, topics.heartbeat], (err) => {
+    // 订阅聊天消息、所有用户的 heartbeat 和管理主题
+    client.subscribe([topics.chat, topics.heartbeatSubscribe, topics.admin], (err) => {
       if (err) {
         sysMsg('订阅失败: ' + err.message, 'error');
       } else {
@@ -1162,13 +1166,13 @@ function connectChat() {
           return;
         }
         showMsg(data);
-      } else if (topic === topics.heartbeat) {
-        // 处理被踢出
+      } else if (topic === topics.admin) {
+        // 处理管理消息（如 kick）
         if (data.type === 'kick' && data.target === currentUser.username) {
           sysMsg('您已被管理员移出聊天室', 'error');
           setTimeout(() => backToMain(), 2000);
-          return;
         }
+      } else if (topic.startsWith(`${currentRoomId}/heartbeat/`)) {
         handleHeartbeat(data, clientId, topics);
       }
     } catch (e) {
@@ -1194,12 +1198,14 @@ function connectChat() {
 function stopChatConnection() {
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   if (timeoutTimer) clearInterval(timeoutTimer);
-  if (client && client.connected && currentClientId) {
-    // 发布 bye 消息，通知其他端清理本端在线记录
+  if (client && client.connected && currentClientId && currentUser) {
+    // 使用个人 heartbeat 主题发布 bye 消息，覆盖 hello 的 retained 状态
+    // 每个用户有独立的主题，互不干扰
+    const myHeartbeat = `${currentRoomId}/heartbeat/${currentUser.username}`;
     try {
-      client.publish(`${currentRoomId}/heartbeat`, JSON.stringify({
-        type: 'bye', id: currentClientId, user: currentUser ? currentUser.username : ''
-      }));
+      client.publish(myHeartbeat, JSON.stringify({
+        type: 'bye', id: currentClientId, user: currentUser.username
+      }), { retain: true });
     } catch (e) { /* 忽略发送错误 */ }
   }
   if (client) {
@@ -1237,12 +1243,14 @@ function initHeartbeat(clientId, topics) {
   }
   updateOnlineCount();
   
-  client.publish(topics.heartbeat, JSON.stringify({ 
+  // 使用 retain: true 发布 hello 消息到个人主题，覆盖旧的 retained 消息
+  // 每个用户有独立的 heartbeat 主题，互不干扰
+  client.publish(topics.myHeartbeat, JSON.stringify({ 
     type: 'hello', id: clientId, user: currentUser.username 
-  }));
+  }), { retain: true });
   
   heartbeatTimer = setInterval(() => {
-    client.publish(topics.heartbeat, JSON.stringify({ 
+    client.publish(topics.myHeartbeat, JSON.stringify({ 
       type: 'heartbeat', id: clientId, user: currentUser.username, timestamp: Date.now() 
     }));
   }, 5000);
@@ -1278,7 +1286,7 @@ function handleHeartbeat(data, clientId, topics) {
     updateOnlineCount();
     sysMsg(data.user + ' 加入了聊天室', 'success');
     
-    client.publish(topics.heartbeat, JSON.stringify({ 
+    client.publish(topics.myHeartbeat, JSON.stringify({ 
       type: 'heartbeat', id: clientId, user: currentUser.username, timestamp: now 
     }));
   } else if (data.type === 'heartbeat' && data.id !== clientId) {
@@ -1768,7 +1776,7 @@ function adminKickUser() {
     msgId: 'sys_' + Date.now(),
     type: 'system'
   }));
-  client.publish(topics.heartbeat, JSON.stringify({
+  client.publish(topics.admin, JSON.stringify({
     type: 'kick',
     target: username
   }));
